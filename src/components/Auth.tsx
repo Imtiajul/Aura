@@ -28,11 +28,13 @@ export default function Auth({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setSuccessMsg(null);
     setLoading(true);
 
     try {
@@ -43,37 +45,28 @@ export default function Auth({
         if (!data?.user) throw new Error("Could not register session logs.");
 
         // Sync or register the user profile in local backend DB
-        let localUser;
         try {
-          const syncResponse = await fetch("/api/signup", {
+          await fetch("/api/signup", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ id: data.user.id, email, password, name: "User" }),
           });
-          const syncData = await syncResponse.json();
-          if (syncResponse.ok && syncData.user) {
-            localUser = syncData.user;
-          }
         } catch (syncErr) {
           console.warn("Local registration auto-sync skipped:", syncErr);
         }
 
-        // Redirect to onboarding/dashboard
-        onAuthSuccess({
-          name: "User",
-          gender: "Other",
-          age: 28,
-          xp: 150,
-          level: 1,
-          ...localUser,
-          id: data.user.id,
-          email: data.user.email,
-        });
+        // Do NOT auto-login. Clear password, keep email, and redirect to Sign In page.
+        setPassword("");
+        setSuccessMsg("Your account has been created. Please check your email and verify your address before logging in.");
+        setMode("signin");
       } else {
         // Sign In to Supabase Auth
         const { data, error: sbError } = await supabase.auth.signInWithPassword({ email, password });
         if (sbError) throw sbError;
         if (!data?.user) throw new Error("Could not initialize session logs.");
+        if (!data?.session) {
+          throw new Error("A real session could not be established. Please confirm your email first.");
+        }
 
         // Sync or retrieve the user profile from local backend DB
         let localUser;
@@ -378,6 +371,18 @@ export default function Auth({
           </motion.div>
         )}
 
+        {/* Dynamic Success Alert */}
+        {successMsg && (
+          <motion.div 
+            initial={{ opacity: 0, x: -10 }}
+            animate={{ opacity: 1, x: 0 }}
+            className="p-3.5 rounded-xl border border-emerald-500/15 bg-emerald-500/5 text-emerald-400 text-xs font-semibold flex items-start gap-2.5 mb-6 leading-relaxed"
+          >
+            <ShieldCheck className="w-4 h-4 shrink-0 stroke-[2] text-emerald-400" />
+            <span>{successMsg}</span>
+          </motion.div>
+        )}
+
         {/* Input Formulation */}
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -505,7 +510,11 @@ export default function Auth({
             <>
               First time deploying Aura?{" "}
               <button 
-                onClick={() => setMode("signup")}
+                onClick={() => {
+                  setMode("signup");
+                  setError(null);
+                  setSuccessMsg(null);
+                }}
                 className="text-emerald-500 dark:text-emerald-400 font-bold hover:underline cursor-pointer"
               >
                 Sign Up Profile
@@ -515,7 +524,11 @@ export default function Auth({
             <>
               Already registered in your local database?{" "}
               <button 
-                onClick={() => setMode("signin")}
+                onClick={() => {
+                  setMode("signin");
+                  setError(null);
+                  setSuccessMsg(null);
+                }}
                 className="text-emerald-500 dark:text-emerald-400 font-bold hover:underline cursor-pointer"
               >
                 Sign In

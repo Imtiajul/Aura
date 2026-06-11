@@ -371,7 +371,22 @@ app.post("/api/signup", (req, res) => {
 
   const existing = db.users.find((u: any) => u.email && email && u.email.toLowerCase() === email.toLowerCase());
   if (existing) {
-    return res.status(400).json({ error: "A user with this email already exists." });
+    if (id && existing.id !== id) {
+      // Bind existing user to the authentic ID
+      const oldId = existing.id;
+      existing.id = id;
+      
+      // Update linked health profiles mapping
+      if (db.health_profiles) {
+        db.health_profiles.forEach((hp: any) => {
+          if (hp.userId === oldId) {
+            hp.userId = id;
+          }
+        });
+      }
+      writeDb(db);
+    }
+    return res.json({ success: true, user: existing });
   }
 
   const newUserId = id || `user_${Date.now()}`;
@@ -445,58 +460,81 @@ app.get("/api/profile", (req, res) => {
 });
 
 app.post("/api/profile/update", (req, res) => {
-  const db = readDb();
-  const user = getActiveUser(req, db);
-  const update = req.body;
-  
-  const userIdx = db.users.findIndex((u: any) => u.id === user?.id);
-  if (userIdx === -1) {
-    return res.status(404).json({ error: "User profile context not found." });
-  }
+  try {
+    const db = readDb();
+    const user = getActiveUser(req, db);
+    const update = req.body;
+    
+    if (!db.users) {
+      db.users = [];
+    }
 
-  db.users[userIdx] = {
-    ...db.users[userIdx],
-    ...update,
-    xp: db.users[userIdx].xp || 100,
-    level: db.users[userIdx].level || 1,
-    badges: db.users[userIdx].badges || ["Early Adopter"],
-    streakDays: db.users[userIdx].streakDays || 1,
-    consistencyShields: db.users[userIdx].consistencyShields || 1,
-  };
+    let userIdx = db.users.findIndex((u: any) => u.id === user?.id);
+    if (userIdx === -1 && user?.email) {
+      userIdx = db.users.findIndex((u: any) => u.email && u.email.toLowerCase() === user.email.toLowerCase());
+    }
 
-  const bmi = (db.users[userIdx].weight / ((db.users[userIdx].height / 100) ** 2)).toFixed(1);
-  const healthScore = Math.min(95, Math.max(50, 95 - Math.abs(db.users[userIdx].weight - db.users[userIdx].goalWeight) * 2));
-  
-  let hpIdx = db.health_profiles.findIndex((hp: any) => hp.userId === user?.id);
-  if (hpIdx === -1) {
-    db.health_profiles.push({
-      userId: user?.id,
-      healthScore,
-      riskFactors: [],
-      recommendations: []
+    if (userIdx === -1) {
+      return res.status(404).json({ error: "User profile context not found. Please log in again." });
+    }
+
+    db.users[userIdx] = {
+      ...db.users[userIdx],
+      ...update,
+      xp: db.users[userIdx].xp || 100,
+      level: db.users[userIdx].level || 1,
+      badges: db.users[userIdx].badges || ["Early Adopter"],
+      streakDays: db.users[userIdx].streakDays || 1,
+      consistencyShields: db.users[userIdx].consistencyShields || 1,
+    };
+
+    const weight = Number(db.users[userIdx].weight) || 72;
+    const height = Number(db.users[userIdx].height) || 175;
+    const goalWeight = Number(db.users[userIdx].goalWeight) || 68;
+    const sleepHours = Number(db.users[userIdx].sleepHours) || 8;
+
+    const bmiVal = height > 0 ? (weight / ((height / 100) ** 2)) : 22.0;
+    const bmi = isNaN(bmiVal) || !isFinite(bmiVal) ? "22.0" : bmiVal.toFixed(1);
+    const healthScore = Math.min(95, Math.max(50, 95 - Math.abs(weight - goalWeight) * 2));
+    
+    if (!db.health_profiles) {
+      db.health_profiles = [];
+    }
+
+    let hpIdx = db.health_profiles.findIndex((hp: any) => hp.userId === db.users[userIdx].id);
+    if (hpIdx === -1) {
+      db.health_profiles.push({
+        userId: db.users[userIdx].id,
+        healthScore,
+        riskFactors: [],
+        recommendations: []
+      });
+      hpIdx = db.health_profiles.length - 1;
+    }
+
+    db.health_profiles[hpIdx] = {
+      userId: db.users[userIdx].id,
+      healthScore: healthScore,
+      riskFactors: [
+        `Potential weight shift deviation (BMI: ${bmi})`,
+        sleepHours < 7 ? "Minor sleep disruption risk" : "Standard sleep recovery pattern",
+      ],
+      recommendations: [
+        `Consume customized calorie target of ${Math.round(weight * 25)} kcal daily.`,
+        `Target protein quotient of ${Math.round(weight * 1.8)}g to reach physical benchmark.`,
+        `Leverage focused blocks styled after linear tasks schedule.`,
+      ],
+    };
+
+    writeDb(db);
+    res.json({
+      user: db.users[userIdx],
+      healthProfile: db.health_profiles[hpIdx]
     });
-    hpIdx = db.health_profiles.length - 1;
+  } catch (error: any) {
+    console.error("Critical error in profile/update endpoint:", error);
+    res.status(500).json({ error: error.message || "Failed to finalize profile calibration." });
   }
-
-  db.health_profiles[hpIdx] = {
-    userId: user?.id,
-    healthScore: healthScore,
-    riskFactors: [
-      `Potential weight shift deviation (BMI: ${bmi})`,
-      db.users[userIdx].sleepHours < 7 ? "Minor sleep disruption risk" : "Standard sleep recovery pattern",
-    ],
-    recommendations: [
-      `Consume customized calorie target of ${Math.round(db.users[userIdx].weight * 25)} kcal daily.`,
-      `Target protein quotient of ${Math.round(db.users[userIdx].weight * 1.8)}g to reach physical benchmark.`,
-      `Leverage focused blocks styled after linear tasks schedule.`,
-    ],
-  };
-
-  writeDb(db);
-  res.json({
-    user: db.users[userIdx],
-    healthProfile: db.health_profiles[hpIdx]
-  });
 });
 
 // Goals Router

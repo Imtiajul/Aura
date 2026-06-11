@@ -166,26 +166,73 @@ export default function App() {
   };
 
   useEffect(() => {
+    let active = true;
+    let subscription: any = null;
+
     const initSession = async () => {
       try {
         const { data: { session } } = await supabase.auth.getSession();
+        if (!active) return;
+
         if (session?.user) {
           const user = session.user;
           const id = user.id;
           if (localStorage.getItem("aura_user_id") !== id) {
             localStorage.setItem("aura_user_id", id);
           }
-          await loadUserState(id);
+          if (!userProfile || userProfile.id !== id) {
+            await loadUserState(id);
+          }
         } else {
-          await loadUserState();
+          // Protect private pages with getSession() - redirect dashboard/onboarding to "signin" (which is equivalent to /login in this state router)
+          if (currentSection === "onboarding" || currentSection === "dashboard") {
+            localStorage.removeItem("aura_user_id");
+            setUserProfile(null);
+            setCurrentSection("signin");
+          }
         }
       } catch (err) {
-        console.error("Error restoring Supabase session on mount:", err);
-        await loadUserState();
+        console.error("Error restoring Supabase session on section change:", err);
+        if (currentSection === "onboarding" || currentSection === "dashboard") {
+          localStorage.removeItem("aura_user_id");
+          setUserProfile(null);
+          setCurrentSection("signin");
+        }
+      }
+
+      try {
+        const { data } = supabase.auth.onAuthStateChange(
+          async (event, session) => {
+            if (!active) return;
+            if (event === "SIGNED_OUT" || !session?.user) {
+              localStorage.removeItem("aura_user_id");
+              setUserProfile(null);
+              if (currentSection === "onboarding" || currentSection === "dashboard") {
+                setCurrentSection("signin");
+              }
+            } else if (session?.user && (!userProfile || userProfile.id !== session.user.id)) {
+              const id = session.user.id;
+              if (localStorage.getItem("aura_user_id") !== id) {
+                localStorage.setItem("aura_user_id", id);
+              }
+              await loadUserState(id);
+            }
+          }
+        );
+        subscription = data.subscription;
+      } catch (authErr) {
+        console.error("Error subscribing to auth changes:", authErr);
       }
     };
     initSession();
-  }, []);
+
+    return () => {
+      active = false;
+      if (subscription) {
+        subscription.unsubscribe();
+      }
+    };
+  }, [currentSection]);
 
   // 2. Action Handlers
 
