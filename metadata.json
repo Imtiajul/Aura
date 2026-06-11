@@ -1,0 +1,10 @@
+{
+  "name": "Aura",
+  "description": "An AI-Powered Personal Performance Operating System for physical health, focus, habits, goal-planning, and high-performance routines overseen by Aura, your elite AI performance coach.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
