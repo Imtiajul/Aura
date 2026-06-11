@@ -6,7 +6,7 @@
 import React, { useState } from "react";
 import { motion } from "motion/react";
 import { Zap, Mail, Lock, ArrowRight, ShieldCheck, AlertCircle, Sun, Moon } from "lucide-react";
-import { supabase } from "../supabaseClient";
+import { supabase, isSupabaseConfigured } from "../supabaseClient";
 
 interface AuthProps {
   onAuthSuccess: (user: any) => void;
@@ -118,15 +118,36 @@ export default function Auth({
     setError(null);
     setLoading(true);
 
-    try {
-      const { data, error: sbError } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: `${window.location.origin}/`,
-          skipBrowserRedirect: true,
-        },
-      });
+    if (!isSupabaseConfigured) {
+      setError(
+        "Supabase is not configured yet! Please define VITE_SUPABASE_URL and VITE_SUPABASE_PUBLIC_KEY in your env/settings, or click 'Start with Trial Account (Demo)' below to experience the Aura Core app immediately."
+      );
+      setLoading(false);
+      return;
+    }
 
+    try {
+      // Race against custom timeout to prevent infinite web loading blocks
+      const timeoutPromise = <T,>(promise: Promise<T>, ms: number, errorMsg: string): Promise<T> => {
+        return Promise.race([
+          promise,
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error(errorMsg)), ms))
+        ]);
+      };
+
+      const oauthResponse = await timeoutPromise(
+        supabase.auth.signInWithOAuth({
+          provider: "google",
+          options: {
+            redirectTo: `${window.location.origin}/`,
+            skipBrowserRedirect: true,
+          },
+        }),
+        8000,
+        "Connection to Supabase timed out. If your free-tier Supabase database is sleeping (due to project inactivity), waking it up can take 10-30 seconds. Please try again in a moment, or use 'Start with Trial Account (Demo)' for instant trial."
+      );
+
+      const { data, error: sbError } = oauthResponse;
       if (sbError) throw sbError;
       if (!data?.url) throw new Error("Could not get Google Authorization URL.");
 
@@ -140,11 +161,27 @@ export default function Auth({
         throw new Error("Popup blocked. Please enable popups for this site to log in with Google.");
       }
 
+      let checkPopupClosed: NodeJS.Timeout;
+
       const handlePopupMessage = async (event: MessageEvent) => {
         if (event.origin !== window.location.origin) return;
 
         if (event.data?.type === "OAUTH_AUTH_SUCCESS") {
           window.removeEventListener("message", handlePopupMessage);
+          if (checkPopupClosed) clearInterval(checkPopupClosed);
+          
+          const { access_token, refresh_token } = event.data;
+          
+          if (access_token && refresh_token) {
+            try {
+              await supabase.auth.setSession({
+                access_token,
+                refresh_token,
+              });
+            } catch (err) {
+              console.warn("Manual setSession failed:", err);
+            }
+          }
           
           const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
           if (sessionErr) {
@@ -204,7 +241,7 @@ export default function Auth({
 
       window.addEventListener("message", handlePopupMessage);
 
-      const checkPopupClosed = setInterval(() => {
+      checkPopupClosed = setInterval(() => {
         if (authWindow.closed) {
           clearInterval(checkPopupClosed);
           setTimeout(async () => {

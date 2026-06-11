@@ -14,5 +14,11 @@ import { createClient } from "@supabase/supabase-js";
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || "https://your-project-id.supabase.co";
 const SUPABASE_PUBLIC_KEY = import.meta.env.VITE_SUPABASE_PUBLIC_KEY || "your-public-anon-key";
 
+export const isSupabaseConfigured = 
+  SUPABASE_URL && 
+  !SUPABASE_URL.includes("your-project-id") && 
+  SUPABASE_PUBLIC_KEY && 
+  !SUPABASE_PUBLIC_KEY.includes("your-public-anon-key");
+
 // Create and export a single Supabase client for the entire application
 export const supabase = createClient(SUPABASE_URL, SUPABASE_PUBLIC_KEY);

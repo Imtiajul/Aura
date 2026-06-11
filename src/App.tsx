@@ -198,6 +198,8 @@ export default function App() {
             localStorage.removeItem("aura_user_id");
             setUserProfile(null);
             setCurrentSection("signin");
+          } else {
+            setLoading((prev) => ({ ...prev, general: false }));
           }
         }
       } catch (err) {
@@ -206,6 +208,8 @@ export default function App() {
           localStorage.removeItem("aura_user_id");
           setUserProfile(null);
           setCurrentSection("signin");
+        } else {
+          setLoading((prev) => ({ ...prev, general: false }));
         }
       }
 
