@@ -364,7 +364,7 @@ const getActiveUser = (req: any, db: any) => {
 
 app.post("/api/signup", (req, res) => {
   const db = readDb();
-  const { email, password, name } = req.body;
+  const { id, email, password, name } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: "Email and password are required." });
   }
@@ -374,7 +374,7 @@ app.post("/api/signup", (req, res) => {
     return res.status(400).json({ error: "A user with this email already exists." });
   }
 
-  const newUserId = `user_${Date.now()}`;
+  const newUserId = id || `user_${Date.now()}`;
   const newUser = {
     id: newUserId,
     email: email,

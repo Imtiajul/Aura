@@ -13,9 +13,11 @@ interface OnboardingProps {
   onCancel: () => void;
   theme: "dark" | "light";
   onToggleTheme: () => void;
+  loading?: boolean;
+  error?: string | null;
 }
 
-export default function Onboarding({ onComplete, onCancel, theme, onToggleTheme }: OnboardingProps) {
+export default function Onboarding({ onComplete, onCancel, theme, onToggleTheme, loading = false, error = null }: OnboardingProps) {
   const [step, setStep] = useState(1);
   const totalSteps = 4;
 
@@ -408,12 +410,22 @@ export default function Onboarding({ onComplete, onCancel, theme, onToggleTheme 
             )}
           </AnimatePresence>
 
+          {/* Error Banner */}
+          {error && (
+            <div id="onboarding_error_banner" className="p-3 text-xs md:text-sm font-semibold rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-400 font-mono flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-ping shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
           {/* Dialog Action Buttons */}
           <div className={`flex items-center justify-between pt-6 border-t mt-8 ${theme === "light" ? "border-slate-200" : "border-slate-800/80"}`}>
             <button
               type="button"
               onClick={step === 1 ? onCancel : prevStep}
+              disabled={loading}
               className={`px-4 py-2.5 text-sm font-semibold transition-colors flex items-center gap-1.5 cursor-pointer ${
+                loading ? "opacity-45 cursor-not-allowed" :
                 theme === "light" ? "text-slate-500 hover:text-slate-800" : "text-slate-400 hover:text-slate-100"
               }`}
             >
@@ -424,9 +436,9 @@ export default function Onboarding({ onComplete, onCancel, theme, onToggleTheme 
               <button
                 type="button"
                 onClick={nextStep}
-                disabled={step === 1 && !formData.name}
+                disabled={loading || (step === 1 && !formData.name)}
                 className={`px-5 py-2.5 rounded-xl text-sm font-bold flex items-center gap-1.5 cursor-pointer transition-all ${
-                  step === 1 && !formData.name
+                  (step === 1 && !formData.name) || loading
                     ? theme === "light"
                       ? "bg-slate-100 text-slate-400 cursor-not-allowed"
                       : "bg-slate-800 text-slate-500 cursor-not-allowed"
@@ -438,9 +450,21 @@ export default function Onboarding({ onComplete, onCancel, theme, onToggleTheme 
             ) : (
               <button
                 type="submit"
-                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-400 to-teal-500 text-slate-950 font-bold hover:shadow-lg hover:shadow-emerald-500/10 hover:scale-102 transition-all text-sm flex items-center gap-1.5 cursor-pointer"
+                disabled={loading}
+                className={`px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-400 to-teal-500 text-slate-950 font-bold hover:shadow-lg hover:shadow-emerald-500/10 hover:scale-102 transition-all text-sm flex items-center gap-1.5 cursor-pointer ${
+                  loading ? "opacity-85 pointer-events-none" : ""
+                }`}
               >
-                Synthesize Twin <Check className="w-4 h-4 stroke-[2.5]" />
+                {loading ? (
+                  <>
+                    <span className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin shrink-0" />
+                    Synthesizing...
+                  </>
+                ) : (
+                  <>
+                    Synthesize Twin <Check className="w-4 h-4 stroke-[2.5]" />
+                  </>
+                )}
               </button>
             )}
           </div>

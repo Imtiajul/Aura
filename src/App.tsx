@@ -23,6 +23,7 @@ import {
   LogOut 
 } from "lucide-react";
 
+import { supabase } from "./supabaseClient";
 import LandingPage from "./components/LandingPage";
 import Onboarding from "./components/Onboarding";
 import Auth from "./components/Auth";
@@ -96,7 +97,10 @@ export default function App() {
     habits: false,
     nutrition: false,
     desk: false,
+    onboarding: false,
   });
+
+  const [onboardingError, setOnboardingError] = useState<string | null>(null);
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -162,14 +166,33 @@ export default function App() {
   };
 
   useEffect(() => {
-    loadUserState();
+    const initSession = async () => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user) {
+          const user = session.user;
+          const id = user.id;
+          if (localStorage.getItem("aura_user_id") !== id) {
+            localStorage.setItem("aura_user_id", id);
+          }
+          await loadUserState(id);
+        } else {
+          await loadUserState();
+        }
+      } catch (err) {
+        console.error("Error restoring Supabase session on mount:", err);
+        await loadUserState();
+      }
+    };
+    initSession();
   }, []);
 
   // 2. Action Handlers
 
   // Profile Onboarding save
   const handleOnboardingComplete = async (profileData: Partial<UserProfile>) => {
-    setLoading((prev) => ({ ...prev, general: true }));
+    setLoading((prev) => ({ ...prev, onboarding: true }));
+    setOnboardingError(null);
     try {
       const res = await fetch("/api/profile/update", {
         method: "POST",
@@ -185,11 +208,27 @@ export default function App() {
         await handleRefreshPrediction();
         
         setCurrentSection("dashboard");
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        setOnboardingError(errJson.error || "Aura profile calibration update failed. Please try again.");
       }
     } catch (err) {
       console.error("Onboarding setup failure", err);
+      setOnboardingError("Connection or network failure during calibration. Please check details and retry.");
     } finally {
-      setLoading((prev) => ({ ...prev, general: false }));
+      setLoading((prev) => ({ ...prev, onboarding: false }));
+    }
+  };
+
+  const handleLogout = async () => {
+    localStorage.removeItem("aura_user_id");
+    setUserProfile(null);
+    setCurrentSection("landing");
+    setMobileMenuOpen(false);
+    try {
+      await supabase.auth.signOut();
+    } catch (err) {
+      console.warn("Supabase auth signout skipped:", err);
     }
   };
 
@@ -507,6 +546,8 @@ export default function App() {
         onToggleTheme={toggleTheme}
         onComplete={handleOnboardingComplete}
         onCancel={() => setCurrentSection("landing")}
+        loading={loading.onboarding}
+        error={onboardingError}
       />
     );
   }
@@ -594,11 +635,7 @@ export default function App() {
           )}
           
           <button
-            onClick={() => {
-              localStorage.removeItem("aura_user_id");
-              setUserProfile(null);
-              setCurrentSection("landing");
-            }}
+            onClick={handleLogout}
             className="w-full py-2.5 px-2.5 rounded-xl border border-slate-900 hover:border-slate-800 text-xs font-bold text-slate-500 hover:text-rose-500 transition-colors flex items-center gap-2.5 justify-center cursor-pointer"
           >
             <LogOut className="w-3.5 h-3.5" />
@@ -668,12 +705,7 @@ export default function App() {
             {/* Mobile Sign Out Action */}
             <div className="pt-2 mt-2 border-t border-slate-900/40">
               <button
-                onClick={() => {
-                  localStorage.removeItem("aura_user_id");
-                  setUserProfile(null);
-                  setCurrentSection("landing");
-                  setMobileMenuOpen(false);
-                }}
+                onClick={handleLogout}
                 className="w-full py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2.5 text-rose-500 hover:bg-rose-500/10 cursor-pointer"
               >
                 <LogOut className="w-4 h-4 text-rose-500" />
