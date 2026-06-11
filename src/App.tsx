@@ -20,7 +20,9 @@ import {
   BookOpen, 
   Moon, 
   Sun,
-  LogOut 
+  LogOut,
+  Sparkles,
+  AlertTriangle 
 } from "lucide-react";
 
 import { supabase } from "./supabaseClient";
@@ -131,7 +133,14 @@ export default function App() {
         const actualUser = profileData?.user || profileData;
         setUserProfile(actualUser);
         if (actualUser && actualUser.name) {
-          setCurrentSection("dashboard");
+          const skipKey = "onboarding_skipped_" + actualUser.id;
+          const hasSkipped = localStorage.getItem(skipKey) === "true";
+          const isIncomplete = !actualUser.gender || actualUser.gender === "Other" || !actualUser.age;
+          if (isIncomplete && !hasSkipped) {
+            setCurrentSection("onboarding");
+          } else {
+            setCurrentSection("dashboard");
+          }
         }
       }
       if (goalsRes.ok) {
@@ -248,7 +257,12 @@ export default function App() {
       });
       if (res.ok) {
         const updated = await res.json();
-        setUserProfile(updated?.user || updated);
+        const actualUser = updated?.user || updated;
+        setUserProfile(actualUser);
+
+        if (actualUser?.id) {
+          localStorage.removeItem("onboarding_skipped_" + actualUser.id);
+        }
         
         // Refresh briefing to adapt to newly registered parameters
         await handleRefreshBriefing();
@@ -575,7 +589,9 @@ export default function App() {
           // Load specific custom goals, habits or food logs
           await loadUserState(user.id);
           // If profile parameters need manual setup
-          if (!user.gender || user.gender === "Other" || !user.age) {
+          const skipKey = "onboarding_skipped_" + user.id;
+          const hasSkipped = localStorage.getItem(skipKey) === "true";
+          if (!hasSkipped && (!user.gender || user.gender === "Other" || !user.age)) {
             setCurrentSection("onboarding");
           } else {
             setCurrentSection("dashboard");
@@ -592,6 +608,12 @@ export default function App() {
         theme={theme}
         onToggleTheme={toggleTheme}
         onComplete={handleOnboardingComplete}
+        onSkip={() => {
+          if (userProfile?.id) {
+            localStorage.setItem("onboarding_skipped_" + userProfile.id, "true");
+          }
+          setCurrentSection("dashboard");
+        }}
         onCancel={() => setCurrentSection("landing")}
         loading={loading.onboarding}
         error={onboardingError}
@@ -811,6 +833,42 @@ export default function App() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* Onboarding Skip Reminder Banner */}
+        {userProfile && localStorage.getItem("onboarding_skipped_" + userProfile.id) === "true" && (
+          <motion.div 
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className={`p-4 rounded-2xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all ${
+              theme === "light"
+                ? "border-amber-200 bg-amber-50/75 text-amber-900 shadow-sm"
+                : "border-amber-500/10 bg-amber-500/10 text-amber-300"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className={`p-2 rounded-xl shrink-0 ${
+                theme === "light" ? "bg-amber-100" : "bg-amber-400/10"
+              }`}>
+                <AlertTriangle className="w-5 h-5 text-amber-500 animate-pulse" />
+              </div>
+              <div>
+                <h4 className="text-sm font-bold tracking-tight">Onboarding Calibration Skip Reminder</h4>
+                <p className={`text-xs mt-0.5 leading-relaxed ${theme === "light" ? "text-amber-700" : "text-amber-400"}`}>
+                  You are currently using generic defaults. Complete the full Bio-Twin setup to unlock personalized metabolic ranges, hydration markers, and tailor your coaching insights.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2.5 shrink-0 w-full sm:w-auto justify-end">
+              <button
+                onClick={() => setCurrentSection("onboarding")}
+                className="w-full sm:w-auto px-4 py-2 text-xs font-bold rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 transition-all flex items-center justify-center gap-1.5 shadow-md shadow-amber-500/15 cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                Calibrate Now
+              </button>
+            </div>
+          </motion.div>
         )}
 
         {/* Dynamic Inner Tab routing */}

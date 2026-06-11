@@ -11,13 +11,14 @@ import { UserProfile } from "../types";
 interface OnboardingProps {
   onComplete: (profile: Partial<UserProfile>) => void;
   onCancel: () => void;
+  onSkip?: () => void;
   theme: "dark" | "light";
   onToggleTheme: () => void;
   loading?: boolean;
   error?: string | null;
 }
 
-export default function Onboarding({ onComplete, onCancel, theme, onToggleTheme, loading = false, error = null }: OnboardingProps) {
+export default function Onboarding({ onComplete, onCancel, onSkip, theme, onToggleTheme, loading = false, error = null }: OnboardingProps) {
   const [step, setStep] = useState(1);
   const totalSteps = 4;
 
@@ -431,6 +432,21 @@ export default function Onboarding({ onComplete, onCancel, theme, onToggleTheme,
             >
               <ArrowLeft className="w-4 h-4" /> Back
             </button>
+
+            {onSkip && (
+              <button
+                type="button"
+                onClick={onSkip}
+                disabled={loading}
+                className={`px-3 py-1.5 text-xs font-bold transition-all hover:underline cursor-pointer rounded-lg border ${
+                  theme === "light"
+                    ? "border-slate-200 hover:border-slate-300 text-slate-500 hover:text-emerald-600 bg-white shadow-sm"
+                    : "border-slate-800 hover:border-slate-700 text-slate-400 hover:text-emerald-400 bg-slate-900/40"
+                }`}
+              >
+                Skip Setup
+              </button>
+            )}
 
             {step < totalSteps ? (
               <button
