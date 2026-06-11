@@ -2,6 +2,10 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import { initClientBackend } from './lib/clientBackend.ts';
+
+// Initialize client-side backend emulator if running on static host (such as Vercel)
+initClientBackend();
 
 // Standalone callback interceptor for OAuth popups
 if (window.opener && (window.location.hash.includes('access_token') || window.location.search.includes('code='))) {

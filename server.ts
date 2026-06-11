@@ -19,7 +19,7 @@ const PORT = 3000;
 
 // Initialize Gemini Client
 let ai: GoogleGenAI | null = null;
-const geminiKey = process.env.GEMINI_API_KEY;
+const geminiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
 
 if (geminiKey) {
   try {
