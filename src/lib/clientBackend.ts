@@ -1017,7 +1017,7 @@ Output JSON:
 }
 
 export async function initClientBackend() {
-  const apiKey = (import.meta as any).env.VITE_GEMINI_API_KEY;
+  const apiKey = (import.meta as any).env.VITE_GEMINI_API_KEY || (typeof process !== "undefined" && process?.env ? process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY : "") || "";
   const isVercel = window.location.hostname !== "localhost" && window.location.hostname !== "127.0.0.1";
   
   // Probe if our Express api server is alive

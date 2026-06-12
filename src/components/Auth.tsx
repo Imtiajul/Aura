@@ -39,37 +39,64 @@ export default function Auth({
 
     try {
       if (mode === "signup") {
-        // Sign Up to Supabase Auth
-        const { data, error: sbError } = await supabase.auth.signUp({ email, password });
-        if (sbError) throw sbError;
-        if (!data?.user) throw new Error("Could not register session logs.");
+        let userId = `user_${Date.now()}`;
+        let useSbSuccess = false;
 
-        // Sync or register the user profile in local backend DB
-        try {
-          await fetch("/api/signup", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ id: data.user.id, email, password, name: "User" }),
-          });
-        } catch (syncErr) {
-          console.warn("Local registration auto-sync skipped:", syncErr);
+        // 1. Try Supabase registration first if configured
+        if (isSupabaseConfigured) {
+          try {
+            const { data, error: sbError } = await supabase.auth.signUp({ email, password });
+            if (!sbError && data?.user) {
+              userId = data.user.id;
+              useSbSuccess = true;
+            } else if (sbError) {
+              console.warn("Supabase auth signup failed, using local registration:", sbError.message);
+            }
+          } catch (sbEx) {
+            console.warn("Supabase signup connection error:", sbEx);
+          }
         }
 
-        // Do NOT auto-login. Clear password, keep email, and redirect to Sign In page.
-        setPassword("");
-        setSuccessMsg("Your account has been created. Please check your email and verify your address before logging in.");
-        setMode("signin");
+        // 2. Back up with local filesystem registration
+        const signupRes = await fetch("/api/signup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: userId, email, password, name: name || "User" }),
+        });
+
+        if (!signupRes.ok) {
+          const errData = await signupRes.json();
+          throw new Error(errData.error || "Unable to register local user profile.");
+        }
+
+        const signupData = await signupRes.json();
+
+        if (isSupabaseConfigured && useSbSuccess) {
+          setPassword("");
+          setSuccessMsg("Profile registered successfully! If your email host requires validation, check your inbox; otherwise, try to sign in directly now.");
+          setMode("signin");
+        } else {
+          setSuccessMsg("Local workspace profile registered! Proceeding to boot up your dashboard...");
+          setTimeout(() => {
+            onAuthSuccess({
+              name: name || "User",
+              gender: "Other",
+              age: 28,
+              xp: 150,
+              level: 1,
+              ...signupData.user,
+              id: userId,
+              email: email,
+            });
+          }, 1200);
+        }
       } else {
-        // Sign In to Supabase Auth
-        const { data, error: sbError } = await supabase.auth.signInWithPassword({ email, password });
-        if (sbError) throw sbError;
-        if (!data?.user) throw new Error("Could not initialize session logs.");
-        if (!data?.session) {
-          throw new Error("A real session could not be established. Please confirm your email first.");
-        }
+        // Sign In
+        let localUser = null;
+        let finalUserObj = null;
+        let loggedIn = false;
 
-        // Sync or retrieve the user profile from local backend DB
-        let localUser;
+        // 1. Authenticate with local filesystem datastore first (bypasses unverified email blocks)
         try {
           const loginRes = await fetch("/api/signin", {
             method: "POST",
@@ -79,32 +106,57 @@ export default function Auth({
           if (loginRes.ok) {
             const loginData = await loginRes.json();
             localUser = loginData.user;
-          } else {
-            // Register matching profile locally if it does not exist (for smooth mock database operations)
-            const signupRes = await fetch("/api/signup", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ id: data.user.id, email, password, name: "User" }),
-            });
-            if (signupRes.ok) {
-              const signupData = await signupRes.json();
-              localUser = signupData.user;
-            }
+            finalUserObj = {
+              id: localUser.id,
+              email: localUser.email,
+              name: localUser.name,
+              ...localUser,
+            };
+            loggedIn = true;
           }
-        } catch (syncErr) {
-          console.warn("Local session mapping skipped:", syncErr);
+        } catch (localErr) {
+          console.warn("Local backend verification error, checking Supabase next:", localErr);
         }
 
-        // Redirect to onboarding/dashboard
+        // 2. If local sign-in didn't match, check Supabase (if configured)
+        if (!loggedIn && isSupabaseConfigured) {
+          try {
+            const { data, error: sbError } = await supabase.auth.signInWithPassword({ email, password });
+            if (!sbError && data?.user) {
+              finalUserObj = data.user;
+              // Sync Supabase user into our local database
+              const syncRes = await fetch("/api/signup", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: data.user.id, email, password, name: "User" }),
+              });
+              if (syncRes.ok) {
+                const syncData = await syncRes.json();
+                localUser = syncData.user;
+              }
+              loggedIn = true;
+            } else if (sbError) {
+              throw sbError;
+            }
+          } catch (sbErr: any) {
+            console.error("Supabase authentication rejected:", sbErr);
+            throw new Error(sbErr.message || "Invalid credentials or pending email confirmation with Supabase.");
+          }
+        }
+
+        if (!loggedIn) {
+          throw new Error("Invalid email or password. Please verify your credentials or register a profile first using 'Sign Up Profile'.");
+        }
+
         onAuthSuccess({
-          name: "User",
+          name: finalUserObj?.name || "User",
           gender: "Other",
           age: 28,
           xp: 150,
           level: 1,
           ...localUser,
-          id: data.user.id,
-          email: data.user.email,
+          id: finalUserObj?.id || `user_${Date.now()}`,
+          email: email,
         });
       }
     } catch (err: any) {

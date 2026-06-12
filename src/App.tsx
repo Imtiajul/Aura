@@ -25,7 +25,7 @@ import {
   AlertTriangle 
 } from "lucide-react";
 
-import { supabase } from "./supabaseClient";
+import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import LandingPage from "./components/LandingPage";
 import Onboarding from "./components/Onboarding";
 import Auth from "./components/Auth";
@@ -207,45 +207,59 @@ export default function App() {
     let subscription: any = null;
 
     const initSession = async () => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
+      // First check if there is a local user ID in localStorage representing an active session
+      const localUid = localStorage.getItem("aura_user_id");
+      if (localUid) {
         if (!active) return;
-
-        if (session?.user) {
-          const user = session.user;
-          const id = user.id;
-          if (localStorage.getItem("aura_user_id") !== id) {
-            localStorage.setItem("aura_user_id", id);
-          }
-          if (!userProfile || userProfile.id !== id) {
-            await loadUserState(id);
-          }
-        } else {
-          // Protect private pages with getSession() - redirect dashboard/onboarding to "signin" (which is equivalent to /login in this state router)
-          if (currentSection === "onboarding" || currentSection === "dashboard") {
-            localStorage.removeItem("aura_user_id");
-            setUserProfile(null);
-            setCurrentSection("signin");
+        try {
+          if (!userProfile || userProfile.id !== localUid) {
+            await loadUserState(localUid);
           } else {
             setLoading((prev) => ({ ...prev, general: false }));
           }
-        }
-      } catch (err) {
-        console.error("Error restoring Supabase session on section change:", err);
-        if (currentSection === "onboarding" || currentSection === "dashboard") {
-          localStorage.removeItem("aura_user_id");
-          setUserProfile(null);
-          setCurrentSection("signin");
-        } else {
+        } catch (err) {
+          console.warn("Error restoring session for local user ID:", err);
           setLoading((prev) => ({ ...prev, general: false }));
+        }
+        return;
+      }
+
+      // If no localUid in localStorage, check Supabase session if configured
+      if (isSupabaseConfigured) {
+        try {
+          const { data: { session } } = await supabase.auth.getSession();
+          if (!active) return;
+
+          if (session?.user) {
+            const id = session.user.id;
+            localStorage.setItem("aura_user_id", id);
+            await loadUserState(id);
+            return;
+          }
+        } catch (err) {
+          console.error("Error restoring Supabase session on section change:", err);
         }
       }
 
+      // Access safety block for private pages
+      if (!active) return;
+      if (currentSection === "onboarding" || currentSection === "dashboard") {
+        localStorage.removeItem("aura_user_id");
+        setUserProfile(null);
+        setCurrentSection("signin");
+      } else {
+        setLoading((prev) => ({ ...prev, general: false }));
+      }
+    };
+
+    initSession();
+
+    if (isSupabaseConfigured) {
       try {
         const { data } = supabase.auth.onAuthStateChange(
           async (event, session) => {
             if (!active) return;
-            if (event === "SIGNED_OUT" || !session?.user) {
+            if (event === "SIGNED_OUT") {
               localStorage.removeItem("aura_user_id");
               setUserProfile(null);
               if (currentSection === "onboarding" || currentSection === "dashboard") {
@@ -264,8 +278,7 @@ export default function App() {
       } catch (authErr) {
         console.error("Error subscribing to auth changes:", authErr);
       }
-    };
-    initSession();
+    }
 
     return () => {
       active = false;
@@ -675,6 +688,27 @@ export default function App() {
       }
     } catch (err) {
       console.error("Food log record delete error", err);
+    }
+  };
+
+  const handleAddFoodLog = async (item: { itemName: string; calories: number; protein: number; carbs: number; fats: number; timestamp?: string }) => {
+    try {
+      const res = await fetch("/api/nutrition/logs/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(item),
+      });
+      if (res.ok) {
+        const resJson = await res.json();
+        if (resJson.foodLogs) {
+          setFoodLogs(resJson.foodLogs);
+        }
+        if (resJson.user) {
+          setUserProfile((prev: any) => ({ ...prev, ...resJson.user }));
+        }
+      }
+    } catch (err) {
+      console.error("Error adding food log manually", err);
     }
   };
 
@@ -1122,6 +1156,7 @@ export default function App() {
               onGeneratePlan={handleGeneratePlan}
               onLogFoodImage={handleLogFoodImage}
               onDeleteFoodLog={handleDeleteFoodLog}
+              onAddManualLog={handleAddFoodLog}
               loading={loading.nutrition}
             />
           )}
