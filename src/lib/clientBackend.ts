@@ -106,7 +106,15 @@ const getInitialLocalDb = () => {
       { id: "f_1", durationMinutes: 25, timestamp: "2026-06-09T10:15:00Z", mode: "work" },
     ],
     ai_conversations: [
-      { sender: "aura", text: "Welcome to Aura. Let's optimize today's performance indices. I'm connected and ready.", timestamp: "2026-06-10T06:45:00Z" },
+      {
+        id: "thread_initial",
+        title: "Session Alpha - Kickoff",
+        createdAt: "2026-06-10T06:45:00Z",
+        updatedAt: "2026-06-10T06:45:00Z",
+        messages: [
+          { sender: "aura", text: "Welcome to Aura. Let's optimize today's performance indices. I'm connected and ready.", timestamp: "2026-06-10T06:45:00Z" }
+        ]
+      }
     ],
     daily_briefings: null,
     daily_reflections: null,
@@ -123,7 +131,54 @@ const getLocalDb = () => {
     localStorage.setItem("aura_local_db", JSON.stringify(defaultDb));
     return defaultDb;
   }
-  return JSON.parse(data);
+  const db = JSON.parse(data);
+
+  // Migration for multiple threads
+  if (!db.ai_conversations || !Array.isArray(db.ai_conversations)) {
+    db.ai_conversations = [];
+  }
+
+  // If the first element has sender directly (i.e. is a raw Message), migrate
+  if (db.ai_conversations.length > 0 && typeof db.ai_conversations[0].sender !== "undefined") {
+    const oldMessages = [...db.ai_conversations];
+    db.ai_conversations = [
+      {
+        id: "thread_default",
+        title: "Initial Performance Session",
+        createdAt: oldMessages[0]?.timestamp || new Date().toISOString(),
+        updatedAt: oldMessages[oldMessages.length - 1]?.timestamp || new Date().toISOString(),
+        messages: oldMessages
+      }
+    ];
+    localStorage.setItem("aura_local_db", JSON.stringify(db));
+  }
+
+  // Pruning any threads older than 30 days
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const originalCount = db.ai_conversations.length;
+  db.ai_conversations = db.ai_conversations.filter((t: any) => {
+    const date = t.updatedAt ? new Date(t.updatedAt) : new Date(t.createdAt || Date.now());
+    return date >= thirtyDaysAgo;
+  });
+  if (db.ai_conversations.length === 0) {
+    db.ai_conversations = [
+      {
+        id: "thread_" + Date.now(),
+        title: "Initial Performance Session",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        messages: [
+          { sender: "aura" as const, text: "Welcome to Aura. Let's optimize today's performance indices. I'm connected and ready.", timestamp: new Date().toISOString() }
+        ]
+      }
+    ];
+  }
+  if (db.ai_conversations.length !== originalCount) {
+    localStorage.setItem("aura_local_db", JSON.stringify(db));
+  }
+
+  return db;
 };
 
 const saveLocalDb = (db: any) => {
@@ -760,17 +815,28 @@ export function setupFetchInterceptor(apiKey: string | undefined) {
 
       } else if (path === "coaching/chat") {
         if (method === "GET") {
-          responseData = db.ai_conversations || [];
+          responseData = { threads: db.ai_conversations };
         } else if (method === "POST") {
-          const { message } = body || {};
+          const { message, threadId } = body || {};
+          let thread = db.ai_conversations.find((t: any) => t.id === threadId);
+          if (!thread) {
+            thread = db.ai_conversations[db.ai_conversations.length - 1] || db.ai_conversations[0];
+          }
+
           const userMsg = { sender: "user" as const, text: message, timestamp: new Date().toISOString() };
-          db.ai_conversations.push(userMsg);
+          thread.messages.push(userMsg);
+          thread.updatedAt = new Date().toISOString();
+
+          if (thread.title === "New Coaching Session" || thread.title === "Initial Performance Session") {
+            const cleanTitle = message.substring(0, 32).trim() + (message.length > 32 ? "..." : "");
+            thread.title = cleanTitle.charAt(0).toUpperCase() + cleanTitle.slice(1);
+          }
 
           let replyText = "";
           if (ai) {
             try {
-              const chatHistory = db.ai_conversations.slice(-8).map((c: any) => `${c.sender}: ${c.text}`).join("\n");
-              const systemPrompt = `You are Aura, an elite AI Performance Coach and behavioral psychologist. Speak as an executive strategist. Keep entries brief, highly tactical, actionable, and tailored to Alex. Avoid generic templates, limit output to 2-3 concise paragraphs.`;
+              const chatHistory = thread.messages.slice(-8).map((c: any) => `${c.sender}: ${c.text}`).join("\n");
+              const systemPrompt = `You are Aura, Alex's dedicated Personal AI Agent, wellness advisor, and executive accountability partner. Address Alex directly. Speak with premium supportive executive assurance. Direct Alex on nutrition, habits, fitness, and micro-productivity tactics specifically tailored to override procrastination. Keep responses beautifully conversational, highly personal, and limit them to 2-3 dynamic paragraphs.`;
               
               const response = await ai.models.generateContent({
                 model: "gemini-3.5-flash",
@@ -790,9 +856,112 @@ export function setupFetchInterceptor(apiKey: string | undefined) {
           }
 
           const auraMsg = { sender: "aura" as const, text: replyText, timestamp: new Date().toISOString() };
-          db.ai_conversations.push(auraMsg);
+          thread.messages.push(auraMsg);
+          thread.updatedAt = new Date().toISOString();
           saveLocalDb(db);
-          responseData = db.ai_conversations;
+          responseData = { threads: db.ai_conversations };
+        }
+
+      } else if (path === "coaching/chat/new") {
+        if (db.ai_conversations.length >= 5) {
+          throw new Error("Maximum limit of 5 chats reached.");
+        }
+        const newThreadId = "thread_" + Date.now();
+        const newThread = {
+          id: newThreadId,
+          title: "New Coaching Session",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          messages: [
+            { sender: "aura" as const, text: "Welcome to your new coaching session! What core performance index would you like to optimize today?", timestamp: new Date().toISOString() }
+          ]
+        };
+        db.ai_conversations.push(newThread);
+        saveLocalDb(db);
+        responseData = { threads: db.ai_conversations, newThreadId };
+
+      } else if (path === "coaching/chat/delete") {
+        const { threadId } = body || {};
+        db.ai_conversations = db.ai_conversations.filter((t: any) => t.id !== threadId);
+
+        if (db.ai_conversations.length === 0) {
+          db.ai_conversations = [
+            {
+              id: "thread_" + Date.now(),
+              title: "Initial Performance Session",
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              messages: [
+                { sender: "aura" as const, text: "Welcome to Aura. Let's optimize today's performance indices. I'm connected and ready.", timestamp: new Date().toISOString() }
+              ]
+            }
+          ];
+        }
+        saveLocalDb(db);
+        responseData = { threads: db.ai_conversations };
+
+      } else if (path === "coaching/plan-consultation") {
+        const { userFocus } = body || {};
+        const getFallbackConsultation = () => {
+          return {
+            rationale: "Aligning energy reserves with focused working blocks. Today's profile indicates high stamina potential.",
+            recommendations: [
+              "Initiate morning 15-minute dynamic physical stretching set",
+              "Execute a 45-minute linear focus work block for key milestones",
+              "Log 4 glasses of structured hydration before noon",
+              "Draft clear evening business review summary & performance delta"
+            ],
+            followUpQuestions: [
+              "What is the exact timeframe or target hour for your primary commitment today?",
+              "Are there specific nutritional fatigue thresholds or energy levels you are battling right now?"
+            ]
+          };
+        };
+
+        if (ai) {
+          try {
+            const goalsText = db.goals?.map((g: any) => `- Goal: ${g.title} (${g.category})`).join("\n") || "";
+            const prompt = `You are Aura, Alex's elite Personal AI Agent and Performance Coach.
+Review user: Alex (Age ${user?.age || 30}).
+Active Goals:
+${goalsText || "None"}
+${userFocus ? `Specific current user focus challenges or target metrics for today: "${userFocus}"` : ""}
+
+Generate a high-performance daily action plan specifically to minimize procrastination and maximize health & productivity index.
+
+If there is anything further you want or need to know from the user to build the absolute complete, customizable best consulting plan (such as their energy spikes, sleep quality, specific deadline details, or focus barriers), you MUST formulate 1 to 2 highly precise personal follow-up questions and include them in "followUpQuestions".
+
+Your output MUST be a JSON object containing:
+1. "rationale": brief tactical strategy guide.
+2. "recommendations": 3-5 specific actionable single-line daily tasks.
+3. "followUpQuestions": 1-2 targeted follow-up questions to customize/refine this further (or empty list).
+Output JSON:
+{
+  "rationale": "...",
+  "recommendations": ["...", "..."],
+  "followUpQuestions": ["...", "..."]
+}`;
+
+            const response = await ai.models.generateContent({
+              model: "gemini-3.5-flash",
+              contents: prompt,
+              config: {
+                responseMimeType: "application/json",
+                temperature: 0.8,
+              }
+            });
+
+            if (response.text) {
+              responseData = JSON.parse(response.text.trim());
+            } else {
+              responseData = getFallbackConsultation();
+            }
+          } catch (err) {
+            console.warn("Client Gemini consultation error:", err);
+            responseData = getFallbackConsultation();
+          }
+        } else {
+          responseData = getFallbackConsultation();
         }
 
       } else if (path === "articles") {

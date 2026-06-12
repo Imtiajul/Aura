@@ -37,6 +37,7 @@ import NutritionCoach from "./components/NutritionCoach";
 import AccountabilityDesk from "./components/AccountabilityDesk";
 import BusinessDashboard from "./components/BusinessDashboard";
 import FamilyDashboard from "./components/FamilyDashboard";
+import UserProfileArea from "./components/UserProfileArea";
 
 import { 
   UserProfile, 
@@ -45,6 +46,8 @@ import {
   FocusSession, 
   FoodLog, 
   Message, 
+  ChatThread,
+  Task,
   DailyBriefing, 
   DailyReflection, 
   BehaviorPrediction 
@@ -53,7 +56,7 @@ import {
 export default function App() {
   const [currentSection, setCurrentSection] = useState<"landing" | "signin" | "signup" | "onboarding" | "dashboard">("landing");
   const [activeTab, setActiveTab] = useState<
-    "coaching" | "goals" | "habits" | "focus" | "nutrition" | "desk" | "family" | "business"
+    "coaching" | "goals" | "habits" | "focus" | "nutrition" | "desk" | "family" | "business" | "profile"
   >("coaching");
 
   // State contracts
@@ -63,6 +66,9 @@ export default function App() {
   const [sessions, setSessions] = useState<FocusSession[]>([]);
   const [foodLogs, setFoodLogs] = useState<FoodLog[]>([]);
   const [conversation, setConversation] = useState<Message[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [threads, setThreads] = useState<ChatThread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string>("");
   const [briefing, setBriefing] = useState<DailyBriefing | null>(null);
   const [reflection, setReflection] = useState<DailyReflection | null>(null);
   const [prediction, setPrediction] = useState<BehaviorPrediction | null>(null);
@@ -116,7 +122,7 @@ export default function App() {
 
     try {
       const hHeaders = { "x-user-id": userId };
-      const [profileRes, goalsRes, habitsRes, sessionsRes, foodsRes, chatRes, briefingRes, reflectionRes, predictionRes] = await Promise.all([
+      const [profileRes, goalsRes, habitsRes, sessionsRes, foodsRes, chatRes, briefingRes, reflectionRes, predictionRes, tasksRes] = await Promise.all([
         window.fetch("/api/profile", { headers: hHeaders }),
         window.fetch("/api/goals", { headers: hHeaders }),
         window.fetch("/api/habits", { headers: hHeaders }),
@@ -125,7 +131,8 @@ export default function App() {
         window.fetch("/api/coaching/chat", { headers: hHeaders }),
         window.fetch("/api/coaching/briefing", { headers: hHeaders }),
         window.fetch("/api/coaching/reflection", { headers: hHeaders }),
-        window.fetch("/api/coaching/predict-behavior", { headers: hHeaders })
+        window.fetch("/api/coaching/predict-behavior", { headers: hHeaders }),
+        window.fetch("/api/tasks", { headers: hHeaders })
       ]);
 
       if (profileRes.ok) {
@@ -161,7 +168,28 @@ export default function App() {
       }
       if (chatRes.ok) {
         const resJson = await chatRes.json();
-        setConversation(Array.isArray(resJson) ? resJson : (resJson?.conversation || []));
+        const fetchedThreads = Array.isArray(resJson?.threads) ? resJson.threads : [];
+        setThreads(fetchedThreads);
+        if (fetchedThreads.length > 0) {
+          setActiveThreadId(fetchedThreads[0].id);
+          setConversation(fetchedThreads[0].messages || []);
+        } else if (Array.isArray(resJson)) {
+          // Fallback legacy support
+          const legacyThread = {
+            id: "thread_legacy",
+            title: "Coaching Session",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            messages: resJson
+          };
+          setThreads([legacyThread]);
+          setActiveThreadId("thread_legacy");
+          setConversation(resJson);
+        }
+      }
+      if (tasksRes.ok) {
+        const resJson = await tasksRes.json();
+        setTasks(Array.isArray(resJson) ? resJson : []);
       }
       if (briefingRes.ok) setBriefing(await briefingRes.json());
       if (reflectionRes.ok) setReflection(await reflectionRes.json());
@@ -297,9 +325,10 @@ export default function App() {
     }
   };
 
-  // Coching conversation
-  const handleSendMessage = async (msgText: string) => {
+  // Coaching conversation
+  const handleSendMessage = async (msgText: string, targetThreadId?: string) => {
     setLoading((prev) => ({ ...prev, coaching: true }));
+    const threadId = targetThreadId || activeThreadId;
     
     // Optimistic User Bubble
     const optUserMsg: Message = {
@@ -313,12 +342,20 @@ export default function App() {
       const chatRes = await fetch("/api/coaching/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: msgText }),
+        body: JSON.stringify({ message: msgText, threadId }),
       });
 
       if (chatRes.ok) {
         const replySet = await chatRes.json();
-        setConversation(Array.isArray(replySet) ? replySet : (replySet?.conversation || []));
+        const updatedThreads = Array.isArray(replySet?.threads) ? replySet.threads : [];
+        setThreads(updatedThreads);
+        
+        const currentThread = updatedThreads.find((t: any) => t.id === threadId);
+        if (currentThread) {
+          setConversation(currentThread.messages);
+        } else if (updatedThreads.length > 0) {
+          setConversation(updatedThreads[0].messages);
+        }
         
         // Refresh User profile to sync level changes/XP earned with high compliance
         const profileRes = await fetch("/api/profile");
@@ -331,6 +368,140 @@ export default function App() {
       console.error("AI coaching message sync crash", err);
     } finally {
       setLoading((prev) => ({ ...prev, coaching: false }));
+    }
+  };
+
+  const handleCreateChatThread = async () => {
+    try {
+      const res = await fetch("/api/coaching/chat/new", {
+        method: "POST",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setThreads(data.threads);
+        if (data.newThreadId) {
+          setActiveThreadId(data.newThreadId);
+          const activeTh = data.threads.find((t: any) => t.id === data.newThreadId);
+          if (activeTh) {
+            setConversation(activeTh.messages);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Failed to create thread", err);
+    }
+  };
+
+  const handleDeleteChatThread = async (threadId: string) => {
+    try {
+      const res = await fetch("/api/coaching/chat/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ threadId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setThreads(data.threads);
+        const remaining = data.threads || [];
+        if (remaining.length > 0) {
+          const newActive = remaining[0].id;
+          setActiveThreadId(newActive);
+          setConversation(remaining[0].messages);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to delete thread", err);
+    }
+  };
+
+  const handleSelectChatThread = (threadId: string) => {
+    setActiveThreadId(threadId);
+    const th = threads.find((t) => t.id === threadId);
+    if (th) {
+      setConversation(th.messages);
+    }
+  };
+
+  // Daily Tasks Management
+  const handleAddTask = async (title: string, priority: "low" | "medium" | "high" = "medium") => {
+    try {
+      // Optimistic Update to give immediate feedback
+      const tempId = `task_temp_${Date.now()}`;
+      const tempTask = {
+        id: tempId,
+        title,
+        priority,
+        completed: false,
+        dueDate: new Date().toISOString().split("T")[0],
+        autoGenerated: false,
+      };
+      setTasks(prev => [tempTask, ...prev]);
+
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, priority }),
+      });
+      if (res.ok) {
+        const savedTask = await res.json();
+        // Replace temp task with confirmed saved task
+        setTasks(prev => prev.map(t => t.id === tempId ? savedTask : t));
+
+        // Sync with official list
+        const tasksRes = await fetch("/api/tasks");
+        if (tasksRes.ok) {
+          const tData = await tasksRes.json();
+          setTasks(Array.isArray(tData) ? tData : []);
+        }
+      } else {
+        // Rollback on failure
+        setTasks(prev => prev.filter(t => t.id !== tempId));
+      }
+    } catch (err) {
+      console.error("Failed to add task", err);
+    }
+  };
+
+  const handleToggleTask = async (taskId: string) => {
+    try {
+      const res = await fetch("/api/tasks/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: taskId }),
+      });
+      if (res.ok) {
+        const tasksRes = await fetch("/api/tasks");
+        if (tasksRes.ok) {
+          const tData = await tasksRes.json();
+          setTasks(Array.isArray(tData) ? tData : []);
+        }
+        
+        // Refresh User profile for potential level up or XP sync!
+        const pRes = await fetch("/api/profile");
+        if (pRes.ok) {
+          const pData = await pRes.json();
+          setUserProfile(pData?.user || pData);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to toggle task", err);
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    try {
+      const res = await fetch(`/api/tasks/${taskId}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        const tasksRes = await fetch("/api/tasks");
+        if (tasksRes.ok) {
+          const tData = await tasksRes.json();
+          setTasks(Array.isArray(tData) ? tData : []);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to delete task", err);
     }
   };
 
@@ -696,15 +867,22 @@ export default function App() {
           </button>
 
           {userProfile && (
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-300 font-bold text-xs uppercase">
+            <button
+              onClick={() => setActiveTab("profile")}
+              className={`w-full flex items-center gap-3 p-2.5 rounded-xl border text-left transition-all hover:scale-[1.01] cursor-pointer ${
+                activeTab === "profile" 
+                  ? "bg-slate-900 border-emerald-500/30 ring-1 ring-emerald-500/20" 
+                  : "bg-slate-950/40 border-slate-900 hover:border-slate-800"
+              }`}
+            >
+              <div className="w-9 h-9 rounded-lg bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-300 font-bold text-xs uppercase shrink-0">
                 {userProfile.name?.slice(0, 2) || "PL"}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="text-xs font-bold text-slate-205 truncate">{userProfile.name || "Default Pilot"}</div>
                 <div className="text-[10px] text-slate-500 font-bold truncate">Level {userProfile.level} Active</div>
               </div>
-            </div>
+            </button>
           )}
           
           <button
@@ -774,6 +952,23 @@ export default function App() {
                 </button>
               );
             })}
+
+            {userProfile && (
+              <button
+                onClick={() => {
+                  setActiveTab("profile");
+                  setMobileMenuOpen(false);
+                }}
+                className={`w-full py-2 px-3 rounded-lg text-xs font-bold flex items-center gap-2.5 ${
+                  activeTab === "profile" 
+                    ? "bg-slate-900 text-white animate-pulse" 
+                    : "text-slate-400 hover:bg-slate-900"
+                }`}
+              >
+                <User className="w-4 h-4 text-emerald-400" />
+                <span>My Profile Area ({userProfile.name})</span>
+              </button>
+            )}
 
             {/* Mobile Sign Out Action */}
             <div className="pt-2 mt-2 border-t border-slate-900/40">
@@ -879,9 +1074,14 @@ export default function App() {
         <div className="min-h-[480px]">
           {activeTab === "coaching" && (
             <AuraChat 
+              threads={threads}
+              activeThreadId={activeThreadId}
               conversation={conversation} 
               userProfile={userProfile} 
               onSendMessage={handleSendMessage}
+              onCreateThread={handleCreateChatThread}
+              onDeleteThread={handleDeleteChatThread}
+              onSelectThread={handleSelectChatThread}
               loading={loading.coaching}
             />
           )}
@@ -892,6 +1092,10 @@ export default function App() {
               onAddGoal={handleAddGoal} 
               onToggleMilestone={handleToggleMilestone} 
               onDeleteGoal={handleDeleteGoal}
+              tasks={tasks}
+              onAddTask={handleAddTask}
+              onToggleTask={handleToggleTask}
+              onDeleteTask={handleDeleteTask}
               loading={loading.goals}
             />
           )}
@@ -942,6 +1146,15 @@ export default function App() {
             <BusinessDashboard 
               onBlastMindfulness={handleBlastMindfulness}
               loading={loading.general}
+            />
+          )}
+
+          {activeTab === "profile" && userProfile && (
+            <UserProfileArea 
+              userProfile={userProfile}
+              theme={theme}
+              onUpdateProfile={handleOnboardingComplete}
+              loading={loading.onboarding}
             />
           )}
         </div>

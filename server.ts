@@ -309,18 +309,71 @@ let dbCache: any = null;
 
 // Read database from cache or file system
 const readDb = () => {
+  let db;
   if (dbCache) {
-    return dbCache;
+    db = dbCache;
+  } else {
+    try {
+      const data = fs.readFileSync(DB_FILE, "utf-8");
+      dbCache = JSON.parse(data);
+      db = dbCache;
+    } catch (err) {
+      console.error("Aura DB Error reading file, resetting to initials:", err);
+      dbCache = createInitialDb();
+      db = dbCache;
+    }
   }
-  try {
-    const data = fs.readFileSync(DB_FILE, "utf-8");
-    dbCache = JSON.parse(data);
-    return dbCache;
-  } catch (err) {
-    console.error("Aura DB Error reading file, resetting to initials:", err);
-    dbCache = createInitialDb();
-    return dbCache;
+
+  // --- MIGRATION & PRUNING logic ---
+  if (!db.ai_conversations || !Array.isArray(db.ai_conversations)) {
+    db.ai_conversations = [];
   }
+
+  // Migrate flat array of messages to thread structure
+  if (db.ai_conversations.length > 0 && typeof db.ai_conversations[0].sender !== "undefined") {
+    const oldMessages = [...db.ai_conversations];
+    db.ai_conversations = [
+      {
+        id: "thread_default",
+        title: "Initial Performance Session",
+        createdAt: oldMessages[0]?.timestamp || new Date().toISOString(),
+        updatedAt: oldMessages[oldMessages.length - 1]?.timestamp || new Date().toISOString(),
+        messages: oldMessages
+      }
+    ];
+    writeDb(db);
+  }
+
+  // Pruning any conversations/messages older than 30 days
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const originalCount = db.ai_conversations.length;
+  
+  db.ai_conversations = db.ai_conversations.filter((t: any) => {
+    const date = t.updatedAt ? new Date(t.updatedAt) : new Date(t.createdAt || Date.now());
+    return date >= thirtyDaysAgo;
+  });
+
+  // Ensure at least one thread exists
+  if (db.ai_conversations.length === 0) {
+    db.ai_conversations = [
+      {
+        id: "thread_" + Date.now(),
+        title: "Initial Performance Session",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        messages: [
+          { sender: "aura" as const, text: "Welcome to Aura. Let's optimize today's performance indices. I'm connected and ready.", timestamp: new Date().toISOString() }
+        ]
+      }
+    ];
+  }
+
+  if (db.ai_conversations.length !== originalCount) {
+    writeDb(db);
+  }
+
+  return db;
 };
 
 // Write database to cache and file system
@@ -1325,9 +1378,15 @@ app.post("/api/coaching/predict-behavior", handlePredictBehavior);
 // Chat with Aura (Accountability Partner)
 app.post("/api/coaching/chat", async (req, res) => {
   const db = readDb();
-  const { message } = req.body;
+  const { message, threadId } = req.body;
 
   if (!message) return res.status(400).json({ error: "Message requested" });
+
+  // Find active thread or default to latest
+  let thread = db.ai_conversations.find((t: any) => t.id === threadId);
+  if (!thread) {
+    thread = db.ai_conversations[db.ai_conversations.length - 1] || db.ai_conversations[0];
+  }
 
   const userMsg = {
     sender: "user" as const,
@@ -1335,24 +1394,33 @@ app.post("/api/coaching/chat", async (req, res) => {
     timestamp: new Date().toISOString(),
   };
 
-  db.ai_conversations.push(userMsg);
+  thread.messages.push(userMsg);
+  thread.updatedAt = new Date().toISOString();
+
+  // Dynamically set title if it is default
+  if (thread.title === "New Coaching Session" || thread.title === "Initial Performance Session") {
+    const cleanTitle = message.substring(0, 32).trim() + (message.length > 32 ? "..." : "");
+    thread.title = cleanTitle.charAt(0).toUpperCase() + cleanTitle.slice(1);
+  }
 
   let responseText = "";
 
   if (ai) {
     try {
-      const chatContext = db.ai_conversations.slice(-8).map((c: any) => `${c.sender}: ${c.text}`).join("\n");
+      const chatContext = thread.messages.slice(-8).map((c: any) => `${c.sender}: ${c.text}`).join("\n");
       const profile = db.users[0];
       const goalsText = db.goals.map((g: any) => `Goal: ${g.title}, milestones completed: ${g.milestones.filter((m: any) => m.status === 'completed').length}/${g.milestones.length}`).join("; ");
       const dailyBrief = db.daily_briefings;
 
-      const systemPrompt = `You are Aura, an elite AI Behavioral Psychologist, Personal Performance Coach, Nutritionist and Goal Planner.
-      You actively drive behavior change with Alex, who is ${profile.age} yrs old, weight ${profile.weight}kg, aiming for ${profile.goalWeight}kg.
-      Their dietary choices: ${profile.dietaryPreferences}.
-      Active goal metrics: ${goalsText}.
-      Today's morning focus advice: ${dailyBrief?.focusGoal || "None"}.
-      
-      Speak as an executive advisor. Match brevity with deep actionable direction. Challenge Alex to overcome procrastination. Highlight past achievements if relevant, but prioritize current commitments. Avoid dry templates or corporate jargon. Focus on consistency. Limit your responses to 3-4 short, punchy paragraphs.`;
+      const systemPrompt = `You are Aura, Alex's dedicated Personal AI Agent, performance mentor, nutritionist, and executive accountability partner.
+      Address Alex directly by name. Act as an deeply elite, sharp, ultra-supportive private agent who possesses complete ambient insight into their stats and roadmaps:
+      - Age: ${profile.age} years old
+      - Current Weight: ${profile.weight}kg, aiming for: ${profile.goalWeight}kg
+      - Nutrition & Dietary Preferences: ${profile.dietaryPreferences}
+      - Long-term accountability goals: ${goalsText || "None specified yet"}
+      - Today's focus priority advice: ${dailyBrief?.focusGoal || "None"}
+
+      Speak like a premium personal chief-of-staff or executive strategic partner. Balance warm encouragement with highly precise, uncompromising cognitive direction to eliminate procrastination. Guide Alex to micro-actions based strictly on their physical constraints and active schedules. Keep responses conversational, beautifully articulated, avoid dry grids, clinical labels, or generic templates. Limit responses to 2-3 short, highly-focused dynamic paragraphs.`;
 
       const chatResponse = await ai.models.generateContent({
         model: "gemini-3.5-flash",
@@ -1378,16 +1446,133 @@ app.post("/api/coaching/chat", async (req, res) => {
     timestamp: new Date().toISOString(),
   };
 
-  db.ai_conversations.push(auraMsg);
+  thread.messages.push(auraMsg);
+  thread.updatedAt = new Date().toISOString();
   writeDb(db);
 
-  // Directly return db.ai_conversations array to comply with client's array map expectations
-  res.json(db.ai_conversations);
+  res.json({ threads: db.ai_conversations });
 });
 
 app.get("/api/coaching/chat", (req, res) => {
   const db = readDb();
-  res.json(db.ai_conversations || []);
+  res.json({ threads: db.ai_conversations });
+});
+
+// Create new Coaching Thread
+app.post("/api/coaching/chat/new", (req, res) => {
+  const db = readDb();
+  if (db.ai_conversations.length >= 5) {
+    return res.status(400).json({ error: "Maximum limit of 5 chats reached. Delete an existing coaching chat to add a new one." });
+  }
+  const newThreadId = "thread_" + Date.now();
+  const newThread = {
+    id: newThreadId,
+    title: "New Coaching Session",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    messages: [
+      { sender: "aura" as const, text: "Welcome to your new coaching session! What core performance index would you like to optimize today?", timestamp: new Date().toISOString() }
+    ]
+  };
+  db.ai_conversations.push(newThread);
+  writeDb(db);
+  res.json({ threads: db.ai_conversations, newThreadId });
+});
+
+// Delete Coaching Thread
+app.post("/api/coaching/chat/delete", (req, res) => {
+  const db = readDb();
+  const { threadId } = req.body;
+  if (!threadId) return res.status(400).json({ error: "Thread ID required" });
+
+  db.ai_conversations = db.ai_conversations.filter((t: any) => t.id !== threadId);
+
+  // ensure at least 1 remains
+  if (db.ai_conversations.length === 0) {
+    db.ai_conversations = [
+      {
+        id: "thread_" + Date.now(),
+        title: "Initial Performance Session",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        messages: [
+          { sender: "aura" as const, text: "Welcome to Aura. Let's optimize today's performance indices. I'm connected and ready.", timestamp: new Date().toISOString() }
+        ]
+      }
+    ];
+  }
+  writeDb(db);
+  res.json({ threads: db.ai_conversations });
+});
+
+// Consult with Gemini to create the optimized daily plan
+app.post("/api/coaching/plan-consultation", async (req, res) => {
+  const db = readDb();
+  const profile = db.users[0];
+  const { userFocus } = req.body || {};
+  const goalsText = db.goals.map((g: any) => `- Goal: ${g.title} (${g.category})`).join("\n");
+  
+  const getFallbackConsultation = () => {
+    return {
+      rationale: "Aligning energy reserves with focused working blocks. Today's profile indicates high stamina potential.",
+      recommendations: [
+        "Initiate morning 15-minute dynamic physical stretching set",
+        "Execute a 45-minute linear focus work block for key milestones",
+        "Log 4 glasses of structured hydration before noon",
+        "Draft clear evening business review summary & performance delta"
+      ],
+      followUpQuestions: [
+        "What is the exact timeframe or target hour for your primary commitment today?",
+        "Are there specific nutritional fatigue thresholds or energy levels you are battling right now?"
+      ]
+    };
+  };
+
+  if (ai) {
+    try {
+      const prompt = `You are Aura, Alex's elite Personal AI Agent and Performance Coach.
+Review the following user metadata:
+- Name: Alex (Age ${profile.age})
+- Daily Routine: ${profile.dailyRoutine || "Standard"}
+- Nutrition & Lifestyle: ${profile.dietaryPreferences || "Standard diet"}
+- Active Long-term Goals:
+${goalsText || "No active long-term goals configured yet."}
+${userFocus ? `- Specific current user focus and focus challenges for today: "${userFocus}"` : ""}
+
+Generate a high-performance daily action plan specifically to minimize procrastination and maximize health & productivity index, taking into consideration the user's specific text input and custom constraints if provided.
+
+If there is anything further you want or need to know from the user to build the absolute complete, customizable best consulting plan (such as their energy spikes, sleep quality, specific deadline details, or focus barriers), you MUST formulate 1 to 2 highly precise personal follow-up questions and include them in "followUpQuestions".
+
+Your output MUST be a JSON object containing:
+1. "rationale": a 1-2 sentence brief tactical strategy guide for today.
+2. "recommendations": an array of 3 to 5 highly specific, clear, actionable single-line tasks (bullet points) that the user can immediately add to their daily task list. Ensure each task is general enough to be a todo item, yet highly specific.
+3. "followUpQuestions": an array of 1 to 2 short, sharp targeted questions to extract further parameters for the ultimate customized deep consultation (or empty array if none are needed).
+
+Output format strictly JSON:
+{
+  "rationale": "...",
+  "recommendations": ["...", "...", "..."],
+  "followUpQuestions": ["...", "..."]
+}`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          temperature: 0.8,
+        }
+      });
+
+      const parsed = JSON.parse(response.text.trim());
+      return res.json(parsed);
+    } catch (err) {
+      console.error("Gemini plan consultation error:", err);
+      return res.json(getFallbackConsultation());
+    }
+  } else {
+    return res.json(getFallbackConsultation());
+  }
 });
 
 // Articles/Knowledge Hub

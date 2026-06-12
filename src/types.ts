@@ -170,6 +170,14 @@ export interface Message {
   timestamp: string;
 }
 
+export interface ChatThread {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: Message[];
+}
+
 export interface Article {
   id: string;
   title: string;
